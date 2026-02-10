@@ -1,0 +1,99 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+
+  main:
+    web-application-type: reactive
+
+  redis:
+    host: api-gateway
+    port: 6379
+
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: true
+          lower-case-service-id: true
+
+      routes:
+
+        # ================= AUTH SERVICE =================
+        - id: auth-service
+          uri: lb://AUTH-SERVICE
+          predicates:
+            - Path=/auth/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: authServiceCB
+                fallbackUri: forward:/auth-fallback
+
+        # ================= EXAM SERVICE =================
+        - id: exam-service
+          uri: lb://EXAM-SERVICE
+          predicates:
+            - Path=/exam/**,/leaderboard/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: examServiceCB
+                fallbackUri: forward:/exam-fallback
+
+            # -------- Rate Limiting (Redis) --------
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+                key-resolver: "#{@ipKeyResolver}"
+
+            # -------- JWT Validation Filter --------
+            - JwtAuthenticationFilter
+
+
+# ================= EUREKA CONFIG =================
+eureka:
+  client:
+    service-url:
+      defaultZone: http://api-gateway:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+
+
+# ================= RESILIENCE4J =================
+resilience4j:
+  circuitbreaker:
+    instances:
+
+      authServiceCB:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+
+      examServiceCB:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        permittedNumberOfCallsInHalfOpenState: 3
+
+
+# ================= ACTUATOR =================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    health:
+      show-details: always
+
+
+# ================= LOGGING =================
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+    reactor.netty.http.client: INFO
